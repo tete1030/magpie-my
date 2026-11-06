@@ -537,7 +537,7 @@ func TestShimTurnsInteractive(t *testing.T) {
 			t.Errorf("the interactive Claude Code was given %s: %q", no, got)
 		}
 	}
-	for _, yes := range []string{"--no-chrome", "mcp__magpie,WebSearch", "--session-id", "high"} {
+	for _, yes := range []string{"--no-chrome", "mcp__my,WebSearch", "--session-id", "high"} {
 		if !slices.Contains(got, yes) {
 			t.Errorf("the interactive Claude Code wasn't given %s: %q", yes, got)
 		}
@@ -707,7 +707,7 @@ func TestShimNeverPrints(t *testing.T) {
 func TestShimFirstMessageWaitsForTools(t *testing.T) {
 	listed := filepath.Join(t.TempDir(), "listed")
 	cfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		"magpie": map[string]any{"command": "magpie", "args": []string{MCPCommand, "callback", "tools.json", listed}},
+		"my": map[string]any{"command": "magpie", "args": []string{MCPCommand, "callback", "tools.json", listed}},
 	}})
 	args := slices.Clone(pArgs)
 	args[slices.Index(args, "--mcp-config")+1] = string(cfg)
@@ -874,7 +874,7 @@ func TestTranslatorAPIError(t *testing.T) {
 func TestTranslatorTellsTheRowsUUID(t *testing.T) {
 	l := &lines{}
 	tr := newTranslator(l)
-	tr.row([]byte(`{"type":"assistant","uuid":"row-1","message":{"id":"m","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_1","name":"mcp__magpie__Read","input":{}}]}}`))
+	tr.row([]byte(`{"type":"assistant","uuid":"row-1","message":{"id":"m","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_1","name":"mcp__my__Read","input":{}}]}}`))
 	if len(l.out) != 1 || l.out[0]["uuid"] != "row-1" {
 		t.Fatalf("got %v", l.out)
 	}

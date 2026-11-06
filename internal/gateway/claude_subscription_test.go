@@ -630,7 +630,7 @@ done
 	}
 }
 
-// A run's Claude Code has the caller's tools only as mcp__magpie__<Name>:
+// A run's Claude Code has the caller's tools only as mcp__my__<Name>:
 // its built-ins are off. A run started anew on a long conversation was told
 // every past call by its bare name ([tool call Bash …]), so the model
 // called Bash, Claude Code answered "Bash is disabled for this session, in
@@ -659,8 +659,8 @@ func TestClaudePromptTellsPastCallsByTheRunsNames(t *testing.T) {
 	}
 	check := func(what, got string) {
 		t.Helper()
-		if !strings.Contains(got, "[tool call mcp__magpie__Bash id=toolu_1 ") || strings.Contains(got, "[tool call Bash ") {
-			t.Errorf("%s: a call of the caller's Bash isn't told as the run's mcp__magpie__Bash: %q", what, got)
+		if !strings.Contains(got, "[tool call mcp__my__Bash id=toolu_1 ") || strings.Contains(got, "[tool call Bash ") {
+			t.Errorf("%s: a call of the caller's Bash isn't told as the run's mcp__my__Bash: %q", what, got)
 		}
 		if !strings.Contains(got, "[tool call team_sync id=toolu_2 ") {
 			t.Errorf("%s: a call of a tool the caller doesn't offer lost its name: %q", what, got)
@@ -674,7 +674,7 @@ func TestClaudePromptTellsPastCallsByTheRunsNames(t *testing.T) {
 	check("next turn", text(renderClaudeTurn(msgs[1:], tools)))
 
 	blocks, _ = renderClaudePrompt(&Request{Messages: msgs[:1], Tools: tools, ToolChoice: "name:Read"})
-	if got := text(blocks); !strings.Contains(got, "You must call the mcp__magpie__Read tool.") {
+	if got := text(blocks); !strings.Contains(got, "You must call the mcp__my__Read tool.") {
 		t.Errorf("a forced tool is named as the caller has it, not as the run can call it: %q", got)
 	}
 }

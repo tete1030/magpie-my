@@ -3,7 +3,10 @@ name: Docker
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags:
+      - 'v*'
+      # magpie-my tags are published by sync-upstream.yml as ghcr.io/<owner>/magpie-my
+      - '!v*-my'
   pull_request:
     paths: [Dockerfile, .dockerignore, .github/workflows/docker.yml]
   workflow_dispatch:

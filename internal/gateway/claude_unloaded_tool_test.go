@@ -15,10 +15,10 @@ import (
 )
 
 // Claude Code with tool search on tells its model a deferred MCP tool by
-// name only ("The following deferred tools are now available via
-// ToolSearch… mcp__magpie__magpie-web-search__web_search") and leaves it out
-// of tools until a ToolSearch loads it. The run's model calls it as told,
-// under the full name, and the client is handed that name, which it runs:
+// name only and leaves it out of tools until a ToolSearch loads it. The
+// run's model calls that tool by the name in the client's text. The
+// bridge's own calls use its server prefix. The client is handed that
+// call under the full name, which it runs:
 // not the bare magpie-web-search__web_search it has no tool of, which it
 // answered "Error: No such tool available: magpie-web-search__web_search"
 // before the model retried (packinggoods, #feedback 11-02). A tool it
@@ -28,12 +28,13 @@ func TestClaudeBridgeHandsOverAnUnloadedMagpieTool(t *testing.T) {
 		t.Skip("a shell script stands in for Claude Code")
 	}
 	dir := t.TempDir()
+	// mcp-rename-keep: caller Library name, not the bridge prefix
 	script := `#!/bin/sh
 while read -r line; do
   case "$line" in
     *call-search*) name=mcp__magpie__magpie-web-search__web_search ;;
-    *call-browser*) name=mcp__magpie__magpie-browser__browser_click ;;
-    *) name=mcp__magpie__Read ;;
+    *call-browser*) name=mcp__my__magpie-browser__browser_click ;;
+    *) name=mcp__my__Read ;;
   esac
   echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m","model":"claude-sonnet-5","usage":{"input_tokens":1}}}}'
   echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_'$$'","name":"'$name'"}}}'
@@ -49,6 +50,7 @@ done
 
 	// the client's tools: ToolSearch, Read and the one MCP tool it loaded;
 	// web_search is announced in the conversation only
+	// mcp-rename-keep: the client's loaded and announced Library tools
 	tools := `[{"name":"ToolSearch","input_schema":{"type":"object"}},{"name":"Read","input_schema":{"type":"object"}},{"name":"mcp__magpie__magpie-browser__browser_click","input_schema":{"type":"object"}}]`
 	announced := "<system-reminder>\nThe following deferred tools are now available via ToolSearch. Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query \"select:<name>[,<name>...]\" to load tool schemas before calling them:\nmcp__magpie__magpie-web-search__web_search\n</system-reminder>\n"
 	p := provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: "u"}}
@@ -77,8 +79,8 @@ done
 		return ""
 	}
 	for what, want := range map[string]string{
-		"call-search: search the web for magpie": "mcp__magpie__magpie-web-search__web_search",
-		"call-browser: click the button":         "mcp__magpie__magpie-browser__browser_click",
+		"call-search: search the web for magpie": "mcp__magpie__magpie-web-search__web_search", // mcp-rename-keep
+		"call-browser: click the button":         "mcp__magpie__magpie-browser__browser_click", // mcp-rename-keep
 		"read a file":                            "Read",
 	} {
 		if got := call(what); got != want {

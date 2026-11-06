@@ -66,7 +66,7 @@ while read -r line; do
   esac
   for k in 1 2 3; do
     sent; start $k
-    echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_G'$me'_'$k'","name":"mcp__magpie__read"}}}'
+    echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_G'$me'_'$k'","name":"mcp__my__read"}}}'
     echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}}'
     echo '{"type":"stream_event","event":{"type":"content_block_stop","index":0}}'
     stop tool_use

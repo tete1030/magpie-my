@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/claudebridge"
 	"github.com/yetone/magpie/internal/wslrun"
 )
 
@@ -1379,7 +1380,7 @@ func newUUID() string {
 // one, where -p skipped them all.
 func interactiveArgs(pargs []string) []string {
 	var out []string
-	allowed := []string{"mcp__magpie"}
+	allowed := []string{claudebridge.AllowedTools}
 	for i := 0; i < len(pargs); i++ {
 		a := pargs[i]
 		switch a {

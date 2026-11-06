@@ -728,11 +728,13 @@ func searcherReady(p provider.Provider) (string, bool) {
 }
 
 // searchTool is the tool a model that can't search is given, under a name
-// the client's own tools leave free.
+// the client's own tools leave free. A taken web_search becomes
+// my_web_search, and my_ again if that is taken too. The Claude bridge
+// offers this name on its MCP server.
 func searchTool(tools []Tool) Tool {
 	name := "web_search"
 	for slices.ContainsFunc(tools, func(t Tool) bool { return t.Name == name }) {
-		name = "magpie_" + name
+		name = "my_" + name
 	}
 	return Tool{Name: name,
 		Description: "Search the web for current information: news, releases, documentation, prices, anything after your training or that you are unsure of. Returns what the pages found say, with their URLs. Cite the URLs you use.",

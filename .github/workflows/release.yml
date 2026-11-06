@@ -11,6 +11,8 @@ on:
   push:
     tags:
       - 'v*'
+      # vX.Y.Z-my is this fork's MCP rename, not an upstream installer release
+      - '!v*-my'
   workflow_dispatch:
     inputs:
       version:

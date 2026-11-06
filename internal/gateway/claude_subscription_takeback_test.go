@@ -63,7 +63,7 @@ while read -r line; do
     *) start; text "pid $$ turn $n"; finish; continue;;
   esac
   start
-  echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_T'$$'_'$n'","name":"mcp__magpie__read"}}}'
+  echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_T'$$'_'$n'","name":"mcp__my__read"}}}'
   echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}}'
   echo '{"type":"stream_event","event":{"type":"content_block_stop","index":0}}'
   echo '{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}}'

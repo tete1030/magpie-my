@@ -100,13 +100,13 @@ while read -r line; do
   case "$line" in *CALLTOOL*)
     m=$((m+1))
     echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m'$$'-'$m'","model":"claude-opus-5-5","usage":{"input_tokens":1}}}}'
-    echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_R'$$'_'$n'","name":"mcp__magpie__read"}}}'
+    echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_R'$$'_'$n'","name":"mcp__my__read"}}}'
     echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}}'
     echo '{"type":"stream_event","event":{"type":"content_block_stop","index":0}}'
     echo '{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}}'
     echo '{"type":"stream_event","event":{"type":"message_stop"}}'
-    echo '{"type":"assistant","uuid":"a'$$'-'$m'","sessionId":"'$sid'","message":{"id":"m'$$'-'$m'","role":"assistant","content":[{"type":"tool_use","id":"toolu_R'$$'_'$n'","name":"mcp__magpie__read","input":{}}]}}' >> "$f"
-    echo '{"type":"assistant","uuid":"a'$$'-'$m'","message":{"id":"m'$$'-'$m'","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_R'$$'_'$n'","name":"mcp__magpie__read","input":{}}]}}'
+    echo '{"type":"assistant","uuid":"a'$$'-'$m'","sessionId":"'$sid'","message":{"id":"m'$$'-'$m'","role":"assistant","content":[{"type":"tool_use","id":"toolu_R'$$'_'$n'","name":"mcp__my__read","input":{}}]}}' >> "$f"
+    echo '{"type":"assistant","uuid":"a'$$'-'$m'","message":{"id":"m'$$'-'$m'","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_R'$$'_'$n'","name":"mcp__my__read","input":{}}]}}'
     # the call's id outside the command substitution: macOS's sh (bash
     # 3.2) reads '$$' in one as $'…' and leaves the pid out
     call='{"tool_call_id":"toolu_R'$$'_'$n'","name":"read","arguments":{}}'
@@ -574,7 +574,7 @@ func TestClaudeCutReplyKeepsTheWholeReply(t *testing.T) {
 	// the shape of a Claude Code 2.1.318 session, trimmed
 	rows := []string{
 		`{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/w","sessionId":"S","version":"2.1.318","type":"user","message":{"role":"user","content":"read main.go"},"uuid":"u1","timestamp":"2026-11-03T10:00:00.000Z"}`,
-		`{"parentUuid":"u1","isSidechain":false,"userType":"external","cwd":"/w","sessionId":"S","version":"2.1.318","message":{"id":"msg_01A","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_01","name":"mcp__magpie__read","input":{"path":"main.go"}}],"stop_reason":null},"requestId":"req_1","type":"assistant","uuid":"a1","timestamp":"2026-11-03T10:00:02.000Z"}`,
+		`{"parentUuid":"u1","isSidechain":false,"userType":"external","cwd":"/w","sessionId":"S","version":"2.1.318","message":{"id":"msg_01A","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_01","name":"mcp__my__read","input":{"path":"main.go"}}],"stop_reason":null},"requestId":"req_1","type":"assistant","uuid":"a1","timestamp":"2026-11-03T10:00:02.000Z"}`,
 		`{"parentUuid":"a1","isSidechain":false,"userType":"external","cwd":"/w","sessionId":"S","version":"2.1.318","type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01","type":"tool_result","content":[{"type":"text","text":"package main"}]}]},"uuid":"r1","timestamp":"2026-11-03T10:00:05.000Z","toolUseResult":[{"type":"text","text":"package main"}]}`,
 		`{"parentUuid":"r1","isSidechain":false,"userType":"external","cwd":"/w","sessionId":"S","version":"2.1.318","message":{"id":"msg_01B","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"thinking","thinking":"short file","signature":"sig"}],"stop_reason":null},"requestId":"req_2","type":"assistant","uuid":"a2","timestamp":"2026-11-03T10:00:06.000Z"}`,
 		`{"parentUuid":"a2","isSidechain":true,"userType":"external","cwd":"/w","sessionId":"S","version":"2.1.318","message":{"id":"msg_01B","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"a sub-agent's"}]},"type":"assistant","uuid":"x1","timestamp":"2026-11-03T10:00:06.500Z"}`,

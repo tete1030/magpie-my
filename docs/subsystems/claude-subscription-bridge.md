@@ -64,10 +64,11 @@ user's own Claude Code sessions leaves a SOCKS proxy out (see
 A saved account added by a setup-token (see [Providers and accounts](providers-accounts.md)) has no sign-in in its config directory. `inClaudeDir`, which builds the env of every run in a saved account's directory (a turn's run, the warm-up, `askClaude`, `/usage`), drops any `CLAUDE_CODE_OAUTH_TOKEN` it was given and sets it to `provider.ClaudeDirToken(configDir)` when that directory is a token account's: the token reaches the real Claude Code there and nowhere else, never on its command line, never in a log, and never to Claude Code's own account. magpie asks Anthropic nothing with it; the entrypoint and everything else about the run are as for any account.
 
 The helper offers each of the client's tools under `bridgeToolName`
-(`bridgeTools`), which Claude Code calls `mcp__magpie__<name>`. Claude Code
+(`bridgeTools`), which Claude Code calls `mcp__my__<name>`. Claude Code
 keeps only `[A-Za-z0-9_-]` of an MCP tool's name, so a name it would change
-(`spawn.agent`, `fs/read`), one longer than 51 (64 with the prefix) or one
-ending as a changed name ends (`_` and 12 hex digits) is cut, made of those
+(`spawn.agent`, `fs/read`), one longer than 51 (the bridge prefix plus the
+name stays within Claude Code's 64) or one ending as a changed name ends
+(`_` and 12 hex digits) is cut, made of those
 characters and given a hash of the whole name: unique (`a.b` and `a_b`
 stay apart), the same in every run, so a resumed session, the history
 (`renderParts`) and the tool-choice line (`toolChoiceAsk`) name it as the
@@ -78,12 +79,17 @@ in `mcpCall` (#2649).
 A client's MCP tool that it announced but hasn't loaded (Claude Code's
 tool search names deferred tools in a reminder and leaves them out of
 `tools` until `ToolSearch` loads them) is no tool of the run's, but the
-run's model reads its name in the conversation and calls it,
-`mcp__magpie__<server>__<tool>`. `toolStart` hands that call over under
-the full name, which is the client's own, when the cut name maps to
-nothing and isn't in `subscriptionRun.tools`: handed over cut, as
-`<server>__<tool>`, the client answered "No such tool available" and the
-model had to load it and call again (packinggoods, 11-02,
+run's model reads its name in the conversation and calls it. A Library
+tool the caller already named `mcp__magpie__<server>__<tool>` keeps that
+name in the client's text. `bridgeToolName` strips one such layer, and
+the bridge's own prefix makes the offered name `mcp__my__<server>__<tool>`,
+so the run is not shown the caller's prefix again. `toolStart`
+(`cutBridgePrefix`) accepts either the bridge prefix or that one caller
+layer, and hands an unloaded call over under the full name the model
+used, which is the client's own, when the cut name maps to nothing and
+isn't in `subscriptionRun.tools`: handed over cut, as `<server>__<tool>`,
+the client answered "No such tool available" and the model had to load it
+and call again (packinggoods, 11-02,
 `TestClaudeBridgeHandsOverAnUnloadedMagpieTool`). A deferred tool of
 another client MCP server (`mcp__linear__…`) is still not handed over.
 
@@ -99,8 +105,9 @@ A call the turn makes anyway is answered at once with an error result
 client never sees it. A named `tool_choice` still offers only that tool.
 `TestClaudeToolChoiceNoneKeepsTheTools` holds it.
 
-The run's MCP server is magpie itself (`magpie claude-mcp-helper`,
-`internal/claudebridge`), which hands each tool call back to the gateway
+The run's MCP server key is `my` (`serverInfo.name`, `--mcp-config`). The
+helper is still `magpie claude-mcp-helper`
+(`internal/claudebridge`), which hands each tool call back to the gateway
 at `POST /_magpie/claude-mcp/<token>` (`mcpCall`), where the call is
 registered in `b.calls` for the turn with its results to find. The token
 is `randomToken` (24 bytes from `crypto/rand`), one per run. The callback
@@ -133,8 +140,8 @@ talks to it as it talks to `-p`: stream-json in and out. The helper:
   `-p`, the stream-json formats, `--verbose`,
   `--include-partial-messages`, `--thinking-display`,
   `--dangerously-skip-permissions` and `--no-session-persistence` go;
-  `--permission-mode default --allowedTools mcp__magpie[,WebSearch]
-  --no-chrome` come. Permissions are not skipped: only magpie's MCP tools
+  `--permission-mode default --allowedTools mcp__my[,WebSearch]
+  --no-chrome` come. Permissions are not skipped: only the bridge's MCP tools
   (and the web search `-p` was given) are allowed, and nothing else is
   offered (`--tools ""`). A new session is given `--session-id`;
 - starts Claude Code in a pseudo-terminal of its own (200x50), no tmux,
@@ -378,7 +385,7 @@ the kept input is the reply's `structured_output`; a turn that ended
 without one is told once to call the tool (`answerAsk`), and fails "no
 answer fitting the schema" when it still doesn't. Neither the call nor
 the words around it reach the client (`r.schema`). A real run (haiku,
-11-02) called `mcp__magpie__StructuredOutput` at once, with input that
+11-02) called `mcp__my__StructuredOutput` at once, with input that
 fit a `pattern`. A schema the compiler can't take is a 400 before any
 run (`TestClaudeTUISchemaAnswer`, `TestClaudeTUISchemaAskedOnce`,
 `TestAnswerTool`).
@@ -1520,7 +1527,7 @@ past call as a `[tool call <name> id=… args=…]` line and each result as
 text: Claude Code has no call to make, the turn ends with end_turn, and the
 client shows the lines as the reply's words while nothing runs (Zhenzhen on
 Discord: Claude Desktop on Fable 5.1 got
-`[tool call mcp__magpie__Bash id=toolu_0Validate bash args={…}]`).
+`[tool call mcp__my__Bash id=toolu_0Validate bash args={…}]`).
 
 - Such a prompt ends with a note (`pastCallsNote`) that the lines record
   earlier calls and that writing one calls nothing. A prompt with no call in

@@ -62,6 +62,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/claudebridge"
 	"github.com/yetone/magpie/internal/claudecode"
 	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/netproxy"
@@ -413,7 +414,7 @@ type shownCall struct {
 }
 
 // waitTool collects a tool result that took longer than an agent's patience.
-const waitTool = "magpie_wait"
+const waitTool = "my_wait"
 
 type mcpToolResult struct {
 	Content []map[string]any `json:"content"`
@@ -1006,7 +1007,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	// the interactive mode's first message waits for the file the tool
 	// server writes once Claude Code has listed its tools (MinhuWang on X)
 	mcpConfig, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		"magpie": map[string]any{"command": exe, "args": []string{claudetui.MCPCommand, callbackPath, toolsPath, filepath.Join(tmp, "listed")}},
+		claudebridge.MCPServer: map[string]any{"command": exe, "args": []string{claudetui.MCPCommand, callbackPath, toolsPath, filepath.Join(tmp, "listed")}},
 	}})
 	args := claudeCLIArgs(model, string(mcpConfig), req.Effort, req.WebSearch)
 	if req.ThinkOff {
@@ -3676,7 +3677,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			own[index] = true
 			return "", false
 		}
-		rest, ok := strings.CutPrefix(name, "mcp__magpie__")
+		rest, ok := cutBridgePrefix(name)
 		r.mu.Lock()
 		called := name
 		name = declaredName(r.names, rest)
@@ -3773,7 +3774,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 					return
 				}
 				begin("msg_"+strings.ReplaceAll(newUUID(), "-", ""), r.model, cliUsage{})
-				name, _ = toolStart(0, "mcp__magpie__"+name)
+				name, _ = toolStart(0, claudebridge.MCPPrefix+name)
 				told[id] = true
 				if written[id] {
 					delete(written, id)
@@ -3907,7 +3908,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			_ = json.Unmarshal(envelope.Message, &whole)
 			var ids []string
 			for _, c := range whole.Content {
-				if c.Type == "tool_use" && strings.HasPrefix(c.Name, "mcp__magpie__") && c.ID != "" {
+				if c.Type == "tool_use" && strings.HasPrefix(c.Name, claudebridge.MCPPrefix) && c.ID != "" {
 					ids = append(ids, c.ID)
 				}
 			}
@@ -4745,28 +4746,40 @@ func historyEnd(msgs []Message) int {
 // "Bash is disabled for this session, in subagents as well as here.",
 // which the model takes for a fact and gives up (#958).
 func bridgeName(name string) string {
-	return "mcp__magpie__" + bridgeToolName(name)
+	return claudebridge.MCPPrefix + bridgeToolName(name)
+}
+
+// cutBridgePrefix strips the prefix on a tool call from the run's Claude
+// Code. The run calls the bridge's tools with MCPPrefix. A call that
+// instead carries the caller's Library prefix (a deferred tool named in
+// the client's text) has that one layer stripped; toolStart hands the
+// full name back when it is not one of the tools the client loaded.
+func cutBridgePrefix(name string) (string, bool) {
+	if rest, ok := strings.CutPrefix(name, claudebridge.MCPPrefix); ok {
+		return rest, true
+	}
+	return strings.CutPrefix(name, claudebridge.CallerLibraryPrefix)
 }
 
 // bridgeToolName is the name the MCP helper offers a tool of the caller's
 // under. Claude Code takes an MCP tool's name as [A-Za-z0-9_-] only, with
-// mcp__magpie__ before it in at most 64: it made "spawn.agent" its
+// the bridge prefix before it in at most 64: it made "spawn.agent" its
 // spawn_agent, which the client never offered (#2649). A name it would
 // change, or one ending as a changed name ends, is told apart by a hash of
 // it, the same in every run, so a resumed session and a conversation's
-// history name the tool as before; declaredName maps it back.
+// history name the tool as before; declaredName maps it back. Names stay
+// within 51 characters, so the bridge prefix plus the name stays within 64.
 //
-// A tool of magpie's own MCP server, which the client (Claude Code with
-// magpie's Library) already names mcp__magpie__<server>__<tool>, is
-// offered under the rest of its name: with the helper's mcp__magpie__
-// before it again, the run's model was shown
-// mcp__magpie__mcp__magpie__magpie-browser__browser_click, while a
-// deferred tool the client named in its text kept the single prefix
-// (packinggoods on Discord, 11-01). The model now sees the client's own
-// name. A client offering both "mcp__magpie__x" and a bare "x" would
-// have the two offered alike, which this doesn't tell apart.
+// A tool the caller already named with one Library prefix
+// (CallerLibraryPrefix, then <server>__<tool>) is offered under the rest
+// of its name. The bridge adds its own prefix, so the run is shown one
+// prefix and not the caller's prefix again. A deferred tool the client
+// named in its text keeps the caller's prefix; cutBridgePrefix still
+// recognizes that layer (packinggoods on Discord, 11-01). A client
+// offering both a prefixed name and the same name bare would have the two
+// offered alike, which this doesn't tell apart.
 func bridgeToolName(name string) string {
-	if rest, ok := strings.CutPrefix(name, "mcp__magpie__"); ok && bridgeToolNameOK.MatchString(rest) && !bridgeToolNameHashed.MatchString(rest) {
+	if rest, ok := strings.CutPrefix(name, claudebridge.CallerLibraryPrefix); ok && bridgeToolNameOK.MatchString(rest) && !bridgeToolNameHashed.MatchString(rest) {
 		return rest
 	}
 	if bridgeToolNameOK.MatchString(name) && !bridgeToolNameHashed.MatchString(name) {

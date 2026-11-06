@@ -53,7 +53,7 @@ type WSL struct {
 }
 
 // MCPCommand is the hidden subcommand of magpie's tool server, the MCP
-// server a run's --mcp-config names "magpie" (claudebridge.RunMCP). Its
+// server a run's --mcp-config names "my" (claudebridge.MCPServer). Its
 // arguments are the callback's file, the tools' file and, for the
 // interactive mode, a file it writes once Claude Code has listed its
 // tools: the first message waits for it (MinhuWang on X: a first message
