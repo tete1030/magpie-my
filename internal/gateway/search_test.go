@@ -702,3 +702,18 @@ func BenchmarkSearchedForIt(b *testing.B) {
 		}
 	})
 }
+
+func TestSearchToolCollisionUsesMy(t *testing.T) {
+	for _, tc := range []struct {
+		tools []Tool
+		want  string
+	}{
+		{nil, "web_search"},
+		{[]Tool{{Name: "web_search"}}, "my_web_search"},
+		{[]Tool{{Name: "web_search"}, {Name: "my_web_search"}}, "my_my_web_search"},
+	} {
+		if got := searchTool(tc.tools).Name; got != tc.want {
+			t.Errorf("search tool = %s, want %s", got, tc.want)
+		}
+	}
+}

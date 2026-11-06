@@ -1379,7 +1379,7 @@ func newUUID() string {
 // one, where -p skipped them all.
 func interactiveArgs(pargs []string) []string {
 	var out []string
-	allowed := []string{"mcp__magpie"}
+	allowed := []string{"mcp__my"}
 	for i := 0; i < len(pargs); i++ {
 		a := pargs[i]
 		switch a {

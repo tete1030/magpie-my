@@ -32,8 +32,8 @@ func TestClaudeBridgeHandsOverAnUnloadedMagpieTool(t *testing.T) {
 while read -r line; do
   case "$line" in
     *call-search*) name=mcp__magpie__magpie-web-search__web_search ;;
-    *call-browser*) name=mcp__magpie__magpie-browser__browser_click ;;
-    *) name=mcp__magpie__Read ;;
+    *call-browser*) name=mcp__my__magpie-browser__browser_click ;;
+    *) name=mcp__my__Read ;;
   esac
   echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m","model":"claude-sonnet-5","usage":{"input_tokens":1}}}}'
   echo '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_'$$'","name":"'$name'"}}}'

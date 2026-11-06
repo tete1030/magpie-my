@@ -41,7 +41,7 @@ func (c *tuiCalls) answerCall(id, args string) mcpToolResult {
 }
 
 func answerRow(id, input string) string {
-	return tuiRow("msg_"+id, `{"type":"tool_use","id":"`+id+`","name":"mcp__magpie__`+answerToolName+`","input":`+input+`}`, "tool_use", 9)
+	return tuiRow("msg_"+id, `{"type":"tool_use","id":"`+id+`","name":"mcp__my__`+answerToolName+`","input":`+input+`}`, "tool_use", 9)
 }
 
 // Claude Code's interactive mode ignores --json-schema: the answer is the

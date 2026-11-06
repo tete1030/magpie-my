@@ -63,7 +63,11 @@ func TestNewToolsListedBeforeTheAnswer(t *testing.T) {
 	}
 
 	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
-	caps, _ := next()["result"].(map[string]any)["capabilities"].(map[string]any)["tools"].(map[string]any)
+	init := next()["result"].(map[string]any)
+	if name := init["serverInfo"].(map[string]any)["name"]; name != "my" {
+		t.Errorf("serverInfo.name = %v, want my", name)
+	}
+	caps, _ := init["capabilities"].(map[string]any)["tools"].(map[string]any)
 	if caps["listChanged"] != true {
 		t.Errorf("tools capability = %v, no listChanged", caps)
 	}

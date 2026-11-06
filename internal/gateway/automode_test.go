@@ -586,13 +586,13 @@ func TestClaudeBridgeSafeguardResults(t *testing.T) {
 				d, _ := json.Marshal(map[string]any{"type": "stream_event", "event": map[string]any{"type": "message_delta", "delta": delta}})
 				lines := []string{
 					`{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_client","model":"claude-sonnet-5"}}}`,
-					`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_client","name":"mcp__magpie__Bash"}}}`,
+					`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_client","name":"mcp__my__Bash"}}}`,
 					string(d),
 					`{"type":"stream_event","event":{"type":"message_stop"}}`,
 				}
 				if whole {
 					message := map[string]any{"id": "msg_whole", "model": "claude-sonnet-5", "stop_reason": "tool_use",
-						"content": []any{map[string]any{"type": "tool_use", "id": "toolu_client", "name": "mcp__magpie__Bash", "input": map[string]any{}}}}
+						"content": []any{map[string]any{"type": "tool_use", "id": "toolu_client", "name": "mcp__my__Bash", "input": map[string]any{}}}}
 					if verdict != "null" {
 						message["safeguard_results"] = json.RawMessage(verdict)
 					}

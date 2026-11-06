@@ -36,7 +36,7 @@ func TestClaudeToolNamesComeBackAsDeclared(t *testing.T) {
 	// one message of its stream, or whole when asked to.
 	script := `#!/bin/sh
 for a in "$@"; do
-  case "$a" in *mcpServers*) tp=$(printf '%s' "$a" | sed 's/.*"\([^"]*tools\.json\)".*/\1/');; esac
+  case "$a" in *mcpServers*) printf '%s' "$a" > "` + offered + `.config"; tp=$(printf '%s' "$a" | sed 's/.*"\([^"]*tools\.json\)".*/\1/');; esac
 done
 while read -r line; do
   grep -o '"name":"[^"]*"' "$tp" | sed 's/"name":"//; s/"$//' > ` + offered + `
@@ -47,14 +47,14 @@ while read -r line; do
     for n in $names; do
       i=$((i+1))
       [ -n "$content" ] && content="$content,"
-      content="$content"'{"type":"tool_use","id":"toolu_'$i'","name":"mcp__magpie__'$n'","input":{"n":'$i'}}'
+      content="$content"'{"type":"tool_use","id":"toolu_'$i'","name":"mcp__my__'$n'","input":{"n":'$i'}}'
     done
     echo '{"type":"assistant","message":{"id":"m","model":"claude-sonnet-5","content":['"$content"'],"stop_reason":"tool_use","usage":{"output_tokens":3}}}' ;;
   *)
     echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m","model":"claude-sonnet-5","usage":{"input_tokens":1}}}}'
     i=0
     for n in $names; do
-      echo '{"type":"stream_event","event":{"type":"content_block_start","index":'$i',"content_block":{"type":"tool_use","id":"toolu_'$i'","name":"mcp__magpie__'$n'"}}}'
+      echo '{"type":"stream_event","event":{"type":"content_block_start","index":'$i',"content_block":{"type":"tool_use","id":"toolu_'$i'","name":"mcp__my__'$n'"}}}'
       echo '{"type":"stream_event","event":{"type":"content_block_delta","index":'$i',"delta":{"type":"input_json_delta","partial_json":"{\"n\":'$i'}"}}}'
       echo '{"type":"stream_event","event":{"type":"content_block_stop","index":'$i'}}'
       i=$((i+1))
@@ -122,6 +122,13 @@ done
 				if !slices.Equal(got, want) {
 					t.Errorf("%s: the calls name %q, want the declared %q: %s", what, got, want, rec.Body)
 				}
+				config, _ := os.ReadFile(offered + ".config")
+				var mcp struct {
+					Servers map[string]any `json:"mcpServers"`
+				}
+				if err := json.Unmarshal(config, &mcp); err != nil || len(mcp.Servers) != 1 || mcp.Servers["my"] == nil {
+					t.Fatalf("bridge MCP config = %s, want only my: %v", config, err)
+				}
 				b, _ := os.ReadFile(offered)
 				names := strings.Fields(strings.ReplaceAll(string(b), " ", "\x00"))
 				seen := map[string]bool{}
@@ -145,15 +152,15 @@ done
 	if len(offer) != 1 || !validRe.MatchString(offer[0].Name) || offer[0].Name == "a_b" {
 		t.Fatalf("tool_choice a.b offers %+v", offer)
 	}
-	if got, want := toolChoiceAsk(req), "You must call the mcp__magpie__"+offer[0].Name+" tool."; !strings.Contains(got, want) {
+	if got, want := toolChoiceAsk(req), "You must call the mcp__my__"+offer[0].Name+" tool."; !strings.Contains(got, want) {
 		t.Errorf("tool choice %q, want %q", got, want)
 	}
 	var text strings.Builder
 	renderParts(nil, &text, []Part{{Kind: ToolCall, ID: "c1", Name: "a.b", Args: json.RawMessage(`{}`)}, {Kind: ToolCall, ID: "c2", Name: long, Args: json.RawMessage(`{}`)}}, offeredTools(req.Tools))
-	if !strings.Contains(text.String(), "[tool call mcp__magpie__"+offer[0].Name+" id=c1 ") {
+	if !strings.Contains(text.String(), "[tool call mcp__my__"+offer[0].Name+" id=c1 ") {
 		t.Errorf("history tells a.b otherwise than it is offered (%s): %q", offer[0].Name, text.String())
 	}
-	if !strings.Contains(text.String(), "[tool call mcp__magpie__"+bridgeToolName(long)+" id=c2 ") || len("mcp__magpie__"+bridgeToolName(long)) > 64 {
+	if !strings.Contains(text.String(), "[tool call mcp__my__"+bridgeToolName(long)+" id=c2 ") || len("mcp__my__"+bridgeToolName(long)) > 64 {
 		t.Errorf("history tells the long name as %q", text.String())
 	}
 }
@@ -167,6 +174,7 @@ done
 // name, in the tool list, a tool choice and the history alike, and a call
 // of it comes back under the declared name.
 func TestClaudeBridgeKeepsMagpieMCPNames(t *testing.T) {
+	// Caller Library names retain mcp__magpie__; the bridge adds mcp__my__.
 	declared := []string{
 		"mcp__magpie__magpie-browser__browser_click",
 		"mcp__magpie__magpie-vision__analyze_image",
@@ -182,12 +190,12 @@ func TestClaudeBridgeKeepsMagpieMCPNames(t *testing.T) {
 	names := bridgeNames(tools)
 	for i, offer := range bridgeTools(req) {
 		n := declared[i]
-		seen := "mcp__magpie__" + offer.Name
-		if strings.HasPrefix(n, "mcp__magpie__") && seen != n {
+		seen := "mcp__my__" + offer.Name
+		if strings.HasPrefix(n, "mcp__magpie__") && seen != "mcp__my__"+strings.TrimPrefix(n, "mcp__magpie__") {
 			t.Errorf("%s is shown to the run's model as %s", n, seen)
 		}
-		if strings.Contains(seen, "mcp__magpie__mcp__magpie__") {
-			t.Errorf("%s is offered with mcp__magpie__ twice: %s", n, seen)
+		if strings.Contains(seen, "mcp__my__mcp__magpie__") {
+			t.Errorf("%s is offered with a double MCP prefix: %s", n, seen)
 		}
 		if got := declaredName(names, offer.Name); got != n {
 			t.Errorf("a call of %s (offered %s) comes back as %s", n, offer.Name, got)
@@ -198,11 +206,11 @@ func TestClaudeBridgeKeepsMagpieMCPNames(t *testing.T) {
 	}
 	var text strings.Builder
 	renderParts(nil, &text, []Part{{Kind: ToolCall, ID: "c1", Name: declared[0], Args: json.RawMessage(`{}`)}}, offeredTools(tools))
-	if !strings.Contains(text.String(), "[tool call "+declared[0]+" id=c1 ") {
+	if !strings.Contains(text.String(), "[tool call "+bridgeName(declared[0])+" id=c1 ") {
 		t.Errorf("history tells %s as %q", declared[0], text.String())
 	}
 	req.ToolChoice = "name:" + declared[0]
-	if got := toolChoiceAsk(req); !strings.Contains(got, "You must call the "+declared[0]+" tool.") {
+	if got := toolChoiceAsk(req); !strings.Contains(got, "You must call the "+bridgeName(declared[0])+" tool.") {
 		t.Errorf("tool choice %q", got)
 	}
 }

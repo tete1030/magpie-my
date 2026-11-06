@@ -413,7 +413,7 @@ type shownCall struct {
 }
 
 // waitTool collects a tool result that took longer than an agent's patience.
-const waitTool = "magpie_wait"
+const waitTool = "my_wait"
 
 type mcpToolResult struct {
 	Content []map[string]any `json:"content"`
@@ -1006,7 +1006,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	// the interactive mode's first message waits for the file the tool
 	// server writes once Claude Code has listed its tools (MinhuWang on X)
 	mcpConfig, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		"magpie": map[string]any{"command": exe, "args": []string{claudetui.MCPCommand, callbackPath, toolsPath, filepath.Join(tmp, "listed")}},
+		"my": map[string]any{"command": exe, "args": []string{claudetui.MCPCommand, callbackPath, toolsPath, filepath.Join(tmp, "listed")}},
 	}})
 	args := claudeCLIArgs(model, string(mcpConfig), req.Effort, req.WebSearch)
 	if req.ThinkOff {
@@ -3676,7 +3676,11 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			own[index] = true
 			return "", false
 		}
-		rest, ok := strings.CutPrefix(name, "mcp__magpie__")
+		rest, ok := strings.CutPrefix(name, "mcp__my__")
+		// A deferred caller Library tool can still be named with its legacy prefix.
+		if !ok {
+			rest, ok = strings.CutPrefix(name, "mcp__magpie__")
+		}
 		r.mu.Lock()
 		called := name
 		name = declaredName(r.names, rest)
@@ -3773,7 +3777,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 					return
 				}
 				begin("msg_"+strings.ReplaceAll(newUUID(), "-", ""), r.model, cliUsage{})
-				name, _ = toolStart(0, "mcp__magpie__"+name)
+				name, _ = toolStart(0, "mcp__my__"+name)
 				told[id] = true
 				if written[id] {
 					delete(written, id)
@@ -3907,7 +3911,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			_ = json.Unmarshal(envelope.Message, &whole)
 			var ids []string
 			for _, c := range whole.Content {
-				if c.Type == "tool_use" && strings.HasPrefix(c.Name, "mcp__magpie__") && c.ID != "" {
+				if c.Type == "tool_use" && strings.HasPrefix(c.Name, "mcp__my__") && c.ID != "" {
 					ids = append(ids, c.ID)
 				}
 			}
@@ -4745,7 +4749,7 @@ func historyEnd(msgs []Message) int {
 // "Bash is disabled for this session, in subagents as well as here.",
 // which the model takes for a fact and gives up (#958).
 func bridgeName(name string) string {
-	return "mcp__magpie__" + bridgeToolName(name)
+	return "mcp__my__" + bridgeToolName(name)
 }
 
 // bridgeToolName is the name the MCP helper offers a tool of the caller's
