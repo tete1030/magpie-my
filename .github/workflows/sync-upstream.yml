@@ -1,0 +1,367 @@
+# Sync yetone/magpie releases onto the my MCP surface and, when live, publish them.
+#
+# Dry-run is the default. A run rebases or reapplies the vendor/mcp-my rename,
+# runs scripts/mcp-rename-gate.sh, and stops before tagging, releasing, or
+# pushing an image. Live release happens only when one of these is set:
+#   - workflow_dispatch input live_release
+#   - repository_dispatch client payload {"live": true}
+#   - repository variable MCP_SYNC_LIVE=true (also covers the 6h schedule)
+#
+# OpenCode: the official action anomalyco/opencode/github with
+# use_github_token: true. That uses this workflow's GITHUB_TOKEN and does
+# not need the OpenCode GitHub App, and it does not need id-token: write
+# (that permission is only for the action's OIDC exchange). The model API
+# key is the repository secret OPENCODE_API_KEY (OpenCode Go). Override the
+# model with the secret OPENCODE_MODEL (default opencode-go/glm-5.3).
+#
+# Processed tags and the last Magpie-identifiability check are stored on
+# the branch vendor/sync-state (processed.tsv, last-ident-check). The
+# rename commits live on vendor/mcp-my (subjects starting with mcp-rename:).
+
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to sync (vX.Y.Z). Empty uses the newest unprocessed tag.'
+        required: false
+        type: string
+      live_release:
+        description: 'Tag vX.Y.Z-my, create a GitHub release, and push the GHCR image. Off keeps the run a dry-run.'
+        required: false
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [sync-upstream]
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      live: ${{ steps.prep.outputs.live }}
+      rel: ${{ steps.prep.outputs.rel }}
+      release: ${{ steps.prep.outputs.release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Tools and git identity
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare the renamed tree
+        id: prep
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_LIVE: ${{ inputs.live_release }}
+          DISPATCH_TAG: ${{ github.event.client_payload.tag }}
+          DISPATCH_LIVE: ${{ github.event.client_payload.live }}
+          VAR_LIVE: ${{ vars.MCP_SYNC_LIVE }}
+        run: |
+          set -euo pipefail
+          cp scripts/apply-mcp-rename.sh scripts/mcp-rename-gate.sh /tmp/
+
+          live=false
+          if [ "$INPUT_LIVE" = "true" ] || [ "$DISPATCH_LIVE" = "true" ] || [ "$VAR_LIVE" = "true" ]; then
+            live=true
+          fi
+
+          requested="${INPUT_TAG:-${DISPATCH_TAG:-}}"
+          if [ -n "$requested" ] && ! printf '%s' "$requested" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag must look like vX.Y.Z" >&2
+            exit 1
+          fi
+
+          mapfile -t tags < <(git ls-remote --tags https://github.com/yetone/magpie.git \
+            | awk '{print $2}' | sed 's#refs/tags/##; s/\^{}//' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -u | sort -V)
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo "no upstream tags" >&2
+            exit 1
+          fi
+
+          # State branch. Missing on the first run.
+          if git fetch origin vendor/sync-state; then
+            git show origin/vendor/sync-state:processed.tsv > /tmp/processed.tsv 2>/dev/null || : > /tmp/processed.tsv
+            git show origin/vendor/sync-state:last-ident-check > /tmp/last-ident-check 2>/dev/null || echo 0 > /tmp/last-ident-check
+          else
+            : > /tmp/processed.tsv
+            echo 0 > /tmp/last-ident-check
+          fi
+
+          now=$(date +%s)
+          last=$(tr -cd '0-9' < /tmp/last-ident-check || true)
+          last=${last:-0}
+          ident=false
+          if [ $((now - last)) -gt 259200 ]; then
+            ident=true
+          fi
+
+          status_of() {
+            awk -v t="$1" '$1==t {s=$2} END {print s}' /tmp/processed.tsv
+          }
+
+          if [ -n "$requested" ]; then
+            tag="$requested"
+          else
+            tag=""
+            # Newest unprocessed tag. Older ones stay put until a run names them.
+            for ((i=${#tags[@]}-1; i>=0; i--)); do
+              t=${tags[i]}
+              st=$(status_of "$t")
+              if [ "$live" = true ]; then
+                [ "$st" = released ] && continue
+              else
+                [ -n "$st" ] && continue
+              fi
+              tag="$t"
+              break
+            done
+            if [ -z "$tag" ] && [ "$ident" = true ]; then
+              tag="${tags[${#tags[@]}-1]}"
+              echo "no unprocessed tag; identifiability check on $tag"
+            fi
+          fi
+
+          if [ -z "$tag" ]; then
+            echo "nothing to sync"
+            echo "live=$live" >> "$GITHUB_OUTPUT"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --depth=1 https://github.com/yetone/magpie.git "refs/tags/${tag}:refs/tags/${tag}"
+          sha=$(git rev-parse "${tag}^{}")
+          echo "upstream $tag $sha (live=$live ident=$ident)"
+
+          git checkout -B "sync/mcp-my-${tag#v}" "$sha"
+          conflict=false
+          commits=()
+          if git fetch --depth=30 origin vendor/mcp-my; then
+            mapfile -t commits < <(git log --reverse --format=%H origin/vendor/mcp-my --grep='^mcp-rename:')
+          fi
+          if [ "${#commits[@]}" -gt 0 ]; then
+            if ! git cherry-pick "${commits[@]}"; then
+              conflict=true
+              echo "cherry-pick conflict; reapplying scripts/apply-mcp-rename.sh"
+              git cherry-pick --abort || true
+              git reset --hard "$sha"
+            fi
+          else
+            echo "no mcp-rename commits on vendor/mcp-my; applying the script"
+            conflict=true
+          fi
+
+          mkdir -p scripts
+          cp /tmp/apply-mcp-rename.sh /tmp/mcp-rename-gate.sh scripts/
+          chmod +x scripts/apply-mcp-rename.sh scripts/mcp-rename-gate.sh
+          script_failed=false
+          if ! bash scripts/apply-mcp-rename.sh; then
+            script_failed=true
+          fi
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "mcp-rename: reapply MCP surface onto ${tag}"
+          fi
+
+          gate=true
+          if ! bash scripts/mcp-rename-gate.sh; then
+            gate=false
+          fi
+
+          agent=false
+          if [ "$conflict" = true ] || [ "$gate" = false ] || [ "$script_failed" = true ] || [ "$ident" = true ]; then
+            agent=true
+          fi
+
+          # Publish only in live mode, and only when this -my tag is not already on origin.
+          # The gate may still be red here; the release steps wait until it passes.
+          rel="v${tag#v}-my"
+          release=false
+          if [ "$live" = true ] && ! git ls-remote --exit-code --tags origin "refs/tags/${rel}" >/dev/null 2>&1; then
+            release=true
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "rel=$rel"
+            echo "live=$live"
+            echo "ident=$ident"
+            echo "conflict=$conflict"
+            echo "gate=$gate"
+            echo "agent=$agent"
+            echo "release=$release"
+            echo "skip=false"
+            echo "sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+          # The agent step checks this branch out from origin.
+          if [ "$agent" = true ]; then
+            git push -u origin "HEAD:sync/mcp-my-${tag#v}"
+          fi
+
+      - name: OpenCode agent
+        if: steps.prep.outputs.skip != 'true' && steps.prep.outputs.agent == 'true'
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: ${{ secrets.OPENCODE_MODEL != '' && secrets.OPENCODE_MODEL || 'opencode-go/glm-5.3' }}
+          use_github_token: true
+          prompt: |
+            You are repairing the magpie-my MCP rename on branch sync/mcp-my-${{ steps.prep.outputs.tag }}.
+            Commit on this branch and push it. Do not force-push main. Do not open a release.
+
+            The bridge MCP surface must be:
+            - mcpServers / --mcp-config server key `my`
+            - tool prefix `mcp__my__` (bridgeName, toolStart, transcript calls)
+            - --allowedTools `mcp__my`
+            - MCP serverInfo.name `my`
+            - collision tools `my_web_search` and `my_wait`
+            Strip one caller Library prefix (CallerLibraryPrefix in internal/claudebridge/surface.go) before adding `mcp__my__`, so a Library tool is not offered with that prefix twice. The bridge's own server key stays `my`.
+
+            Do not rename local paths or routes (`magpie/claude-accounts`, `magpie-claude-work`, `/_magpie/claude-mcp/`), the magpie binary, or prompt-wrapper / conversation_history packaging.
+
+            Resolve rebase conflicts in favor of that rename. scripts/mcp-rename-gate.sh must pass when you are done.
+            If this run is the periodic identifiability check (ident=${{ steps.prep.outputs.ident }}), also remove Magpie-identifiable strings that this bridge would send toward Claude as MCP names. Leave prompt wrappers for a later change unless a gate failure is one of those MCP strings.
+
+      - name: Re-run the gate
+        if: steps.prep.outputs.skip != 'true'
+        id: regate
+        run: |
+          set -euo pipefail
+          branch="sync/mcp-my-${{ steps.prep.outputs.tag }}"
+          if [ "${{ steps.prep.outputs.agent }}" = "true" ]; then
+            git fetch origin "$branch"
+            git reset --hard "origin/$branch"
+          fi
+          if bash scripts/mcp-rename-gate.sh; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::error title=mcp gate::gate still failing for ${{ steps.prep.outputs.tag }}"
+          fi
+
+      - name: Record a gate failure
+        if: steps.prep.outputs.skip != 'true' && steps.regate.outputs.ok != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.prep.outputs.tag }}
+        run: |
+          set -euo pipefail
+          title="mcp sync: ${TAG} did not pass the gate"
+          num=$(gh issue list --state open --search "$title" --json number --jq '.[0].number')
+          body="The upstream tag ${TAG} was rebased or reapplied onto the my MCP surface and scripts/mcp-rename-gate.sh still failed after the OpenCode step. No vX.Y.Z-my release was created. See the Sync upstream run."
+          if [ -n "$num" ] && [ "$num" != "null" ]; then
+            gh issue comment "$num" --body "Seen again ($(date -u +%FT%TZ)). $body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+          exit 1
+
+      - name: Test the renamed tree
+        if: steps.prep.outputs.skip != 'true' && steps.regate.outputs.ok == 'true' && steps.prep.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          go test -tags nogui -count=1 -timeout 20m ./internal/claudebridge ./internal/claudetui
+          go test -tags nogui -count=1 -timeout 25m ./internal/gateway -run 'TestMCPSurfaceNames|TestClaudeBridgeKeeps|TestClaudeBridgeHandsOver|TestClaudeToolNames|TestInvokeReported|TestShimFirstMessage'
+
+      - name: Tag and GitHub release
+        if: steps.prep.outputs.skip != 'true' && steps.regate.outputs.ok == 'true' && steps.prep.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REL: ${{ steps.prep.outputs.rel }}
+          TAG: ${{ steps.prep.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag -a "$REL" -m "magpie-my ${REL} from upstream ${TAG}"
+          git push origin "$REL"
+          gh release create "$REL" --title "$REL" --notes "MCP surface rename of upstream ${TAG}. Image: ghcr.io/${{ github.repository_owner }}/magpie-my:${REL}"
+
+      - name: Push the GHCR image
+        if: steps.prep.outputs.skip != 'true' && steps.regate.outputs.ok == 'true' && steps.prep.outputs.release == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v4
+        if: steps.prep.outputs.skip != 'true' && steps.regate.outputs.ok == 'true' && steps.prep.outputs.release == 'true'
+
+      - uses: docker/login-action@v4
+        if: steps.prep.outputs.skip != 'true' && steps.regate.outputs.ok == 'true' && steps.prep.outputs.release == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: buildx push
+        if: steps.prep.outputs.skip != 'true' && steps.regate.outputs.ok == 'true' && steps.prep.outputs.release == 'true'
+        env:
+          REL: ${{ steps.prep.outputs.rel }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/magpie-my
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/amd64,linux/arm64 --push \
+            --build-arg "VERSION=${REL}" \
+            -t "${IMAGE}:${REL}" \
+            -t "${IMAGE}:latest" \
+            .
+
+      - name: Record sync state
+        if: steps.prep.outputs.skip != 'true' && steps.regate.outputs.ok == 'true'
+        env:
+          TAG: ${{ steps.prep.outputs.tag }}
+          LIVE: ${{ steps.prep.outputs.live }}
+          RELEASE: ${{ steps.prep.outputs.release }}
+          IDENT: ${{ steps.prep.outputs.ident }}
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/sync-state
+          cd /tmp/sync-state
+          if git fetch origin vendor/sync-state; then
+            git checkout -B vendor/sync-state origin/vendor/sync-state
+          else
+            git checkout --orphan vendor/sync-state
+            git rm -rf . >/dev/null 2>&1 || true
+            : > processed.tsv
+            echo 0 > last-ident-check
+          fi
+          if [ "$RELEASE" = "true" ]; then
+            st=released
+          elif [ "$LIVE" = "true" ]; then
+            st=scanned
+          else
+            st=scanned
+          fi
+          grep -v "^${TAG}[[:space:]]" processed.tsv > /tmp/processed.new || true
+          printf '%s\t%s\t%s\n' "$TAG" "$st" "$(date -u +%FT%TZ)" >> /tmp/processed.new
+          sort -u /tmp/processed.new > processed.tsv
+          if [ "$IDENT" = "true" ]; then
+            date +%s > last-ident-check
+          fi
+          git add processed.tsv last-ident-check
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "sync-state: ${TAG} ${st}"
+          git push origin vendor/sync-state
