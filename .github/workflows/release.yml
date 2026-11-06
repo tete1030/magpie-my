@@ -11,6 +11,7 @@ on:
   push:
     tags:
       - 'v*'
+      - '!v*-my'
   workflow_dispatch:
     inputs:
       version:

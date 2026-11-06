@@ -3,7 +3,7 @@ name: Docker
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ['v*', '!v*-my']
   pull_request:
     paths: [Dockerfile, .dockerignore, .github/workflows/docker.yml]
   workflow_dispatch:
