@@ -1,0 +1,68 @@
+{
+  "surface": {
+    "serverKey": {
+      "value": "my",
+      "sites": [
+        {"path": "internal/gateway/claude_subscription.go", "code": "\"my\": map[string]any{\"command\": exe", "count": 1}
+      ]
+    },
+    "serverInfo": {
+      "value": "my",
+      "sites": [
+        {"path": "internal/claudebridge/mcp.go", "code": "\"serverInfo\": map[string]any{\"name\": \"my\", \"version\": \"1\"}", "count": 1}
+      ]
+    },
+    "allowedTools": {
+      "value": "mcp__my",
+      "sites": [
+        {"path": "internal/claudetui/tui.go", "code": "allowed := []string{\"mcp__my\"}", "count": 1}
+      ]
+    },
+    "bridgePrefix": {
+      "value": "mcp__my__",
+      "sites": [
+        {"path": "internal/gateway/claude_subscription.go", "code": "rest, ok := strings.CutPrefix(name, \"mcp__my__\")", "count": 1},
+        {"path": "internal/gateway/claude_subscription.go", "code": "name, _ = toolStart(0, \"mcp__my__\"+name)", "count": 1},
+        {"path": "internal/gateway/claude_subscription.go", "code": "strings.HasPrefix(c.Name, \"mcp__my__\")", "count": 1},
+        {"path": "internal/gateway/claude_subscription.go", "code": "return \"mcp__my__\" + bridgeToolName(name)", "count": 1}
+      ]
+    },
+    "waitTool": {
+      "value": "my_wait",
+      "sites": [
+        {"path": "internal/gateway/claude_subscription.go", "code": "const waitTool = \"my_wait\"", "count": 1}
+      ]
+    },
+    "searchCollision": {
+      "value": "my_",
+      "sites": [
+        {"path": "internal/gateway/search.go", "code": "name = \"my_\" + name", "count": 1}
+      ]
+    }
+  },
+  "legacy_caller_literals": [
+    {
+      "path": "internal/gateway/claude_subscription.go",
+      "code": "rest, ok = strings.CutPrefix(name, \"mcp__magpie__\")",
+      "count": 1,
+      "reason": "Accept an unloaded caller Library tool under its original declared name."
+    },
+    {
+      "path": "internal/gateway/claude_subscription.go",
+      "code": "if rest, ok := strings.CutPrefix(name, \"mcp__magpie__\"); ok && bridgeToolNameOK.MatchString(rest) && !bridgeToolNameHashed.MatchString(rest) {",
+      "count": 1,
+      "reason": "Strip the caller Library prefix before adding the bridge prefix; callbacks retain the caller name."
+    }
+  ],
+  "allowed_paths": [
+    "internal/claudebridge/*.go",
+    "internal/claudetui/*.go",
+    "internal/gateway/*.go",
+    ".github/workflows/sync-upstream.yml",
+    ".github/workflows/release.yml",
+    ".github/workflows/docker.yml",
+    "scripts/mcp-my/gate.sh",
+    "scripts/mcp-my/surface.manifest.yml"
+  ],
+  "forbidden_paths": ["docs/**", "AGENTS.md", "LESSONS.md", "**/AGENTS.md", "**/LESSONS.md"]
+}

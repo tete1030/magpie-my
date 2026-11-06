@@ -3,6 +3,9 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -15,6 +18,113 @@ import (
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/testenv"
 )
+
+// The manifest is the repair agent's map of bridge-owned names. Keep its
+// assertions separate so a gate failure identifies the field and source site.
+func TestMCPSurfaceContract(t *testing.T) {
+	type site struct {
+		Path   string `json:"path"`
+		Code   string `json:"code"`
+		Count  int    `json:"count"`
+		Reason string `json:"reason,omitempty"`
+	}
+	var manifest struct {
+		Surface map[string]struct {
+			Value string `json:"value"`
+			Sites []site `json:"sites"`
+		} `json:"surface"`
+		Legacy    []site   `json:"legacy_caller_literals"`
+		Allowed   []string `json:"allowed_paths"`
+		Forbidden []string `json:"forbidden_paths"`
+	}
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Join(filepath.Dir(file), "..", "..")
+	data, err := os.ReadFile(filepath.Join(root, "scripts/mcp-my/surface.manifest.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// JSON is a YAML subset; both the Go contract and the shell gate read it
+	// without another dependency.
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&manifest); err != nil {
+		t.Fatalf("surface manifest: %v", err)
+	}
+	compact := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	sources := map[string]string{}
+	read := func(t *testing.T, path string) string {
+		t.Helper()
+		if src, ok := sources[path]; ok {
+			return src
+		}
+		b, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources[path] = string(b)
+		return string(b)
+	}
+	check := func(t *testing.T, s site) {
+		t.Helper()
+		if s.Code == "" || s.Count < 1 {
+			t.Fatalf("invalid source site: %+v", s)
+		}
+		if got := strings.Count(compact(read(t, s.Path)), compact(s.Code)); got != s.Count {
+			t.Errorf("%s: %q occurs %d times, want %d", s.Path, s.Code, got, s.Count)
+		}
+	}
+	want := map[string]string{
+		"serverKey": "my", "serverInfo": "my", "allowedTools": "mcp__my",
+		"bridgePrefix": "mcp__my__", "waitTool": "my_wait", "searchCollision": "my_",
+	}
+	if len(manifest.Surface) != len(want) {
+		t.Errorf("surface fields = %d, want %d", len(manifest.Surface), len(want))
+	}
+	for field, value := range want {
+		t.Run(field, func(t *testing.T) {
+			entry := manifest.Surface[field]
+			if entry.Value != value || len(entry.Sites) == 0 {
+				t.Fatalf("manifest value = %q, sites = %d; want %q and source sites", entry.Value, len(entry.Sites), value)
+			}
+			for _, s := range entry.Sites {
+				check(t, s)
+			}
+		})
+	}
+	t.Run("legacyCaller", func(t *testing.T) {
+		if len(manifest.Legacy) != 2 {
+			t.Fatalf("legacy caller sites = %d, want exactly two caller-prefix consumers", len(manifest.Legacy))
+		}
+		allowed := map[string]bool{}
+		for _, s := range manifest.Legacy {
+			if s.Reason == "" {
+				t.Errorf("legacy caller site %s needs a reason", s.Code)
+			}
+			check(t, s)
+			allowed[s.Path+":"+compact(s.Code)] = true
+		}
+		for path, src := range sources {
+			fs := token.NewFileSet()
+			f, err := parser.ParseFile(fs, path, src, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(src, "\n")
+			ast.Inspect(f, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING || !strings.Contains(lit.Value, "mcp__magpie") {
+					return true
+				}
+				pos := fs.Position(lit.Pos())
+				code := compact(lines[pos.Line-1])
+				if !allowed[path+":"+code] {
+					t.Errorf("%s:%d: unexpected legacy caller literal: %s", path, pos.Line, code)
+				}
+				return true
+			})
+		}
+	})
+}
 
 // #2649 (tsy0716): a tool the client named "spawn.agent" came back as
 // "spawn_agent", a tool it never offered: Claude Code takes an MCP tool's

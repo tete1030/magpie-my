@@ -25,7 +25,7 @@ permissions:
 env:
   GH_TOKEN: ${{ github.token }}
   MCP_SYNC_LIVE: ${{ vars.MCP_SYNC_LIVE || 'false' }}
-  OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL || 'opencode-go/glm-5.3' }}
+  OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
   IMAGE: ghcr.io/tete1030/magpie-my
 
 jobs:
@@ -74,6 +74,8 @@ jobs:
           stale=false
           if (( $(date +%s) - $(date -d "$checked" +%s) >= 259200 )); then stale=true; fi
           echo "stale=$stale" >> "$GITHUB_OUTPUT"
+          # Keep the site map available even when replay stops before its commit.
+          cp -R scripts/mcp-my "$RUNNER_TEMP/mcp-my"
           git switch -c "sync/upstream-$tag" "$upstream"
 
       - name: Replay only the small rename commits
@@ -86,43 +88,10 @@ jobs:
             echo 'conflict=true' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Define MCP surface gate
-        run: |
-          cat > "$RUNNER_TEMP/mcp-gate" <<'SH'
-          #!/bin/bash
-          set -euo pipefail
-          test ! -f "$(git rev-parse --git-path CHERRY_PICK_HEAD)"
-          test -z "$(git ls-files -u)"
-          git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD
-          git diff --quiet "$UPSTREAM_SHA" -- docs/
-          unexpected=$(git diff --name-only "$UPSTREAM_SHA" |
-            grep -Ev '^internal/(claudebridge|claudetui|gateway)/.*[.]go$|^[.]github/workflows/(sync-upstream|release|docker)[.]yml$' || true)
-          test -z "$unexpected" || { echo "Unexpected rename files: $unexpected" >&2; exit 1; }
-          python3 - <<'PY'
-          from pathlib import Path
-          # These two legacy literals only consume caller Library names.
-          allowed = {
-              'rest, ok = strings.CutPrefix(name, "mcp__magpie__")',
-              'if rest, ok := strings.CutPrefix(name, "mcp__magpie__"); ok && bridgeToolNameOK.MatchString(rest) && !bridgeToolNameHashed.MatchString(rest) {',
-          }
-          for name in ('internal/gateway/claude_subscription.go', 'internal/claudebridge/mcp.go', 'internal/claudetui/tui.go'):
-              for line in Path(name).read_text().splitlines():
-                  code = line.strip()
-                  if not code.startswith('//') and 'mcp__magpie' in code:
-                      assert code in allowed, (name, code)
-          PY
-          export GOPATH="$(go env GOPATH)" GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)"
-          task_home=$(mktemp -d)
-          trap 'chmod -R u+w "$task_home"; rm -rf "$task_home"' EXIT
-          env HOME="$task_home" go test -tags nogui -timeout 45m ./internal/claudebridge ./internal/claudetui
-          env HOME="$task_home" go test -tags nogui -timeout 45m ./internal/gateway -run 'TestClaudeToolNamesComeBackAsDeclared|TestClaudeBridgeKeepsMagpieMCPNames|TestClaudeBridgeHandsOverAnUnloadedMagpieTool|TestSearchToolCollisionUsesMy|TestClaudeWaitToolUsesMy' -count=1
-          SH
-          chmod +x "$RUNNER_TEMP/mcp-gate"
-
       - name: Check replay
         id: gate
         continue-on-error: true
-        run: '"$RUNNER_TEMP/mcp-gate"'
+        run: scripts/mcp-my/gate.sh 2> >(tee "$RUNNER_TEMP/mcp-gate.stderr" >&2)
 
       - name: Leave a clean branch for the agent to replay conflicted commits
         if: steps.replay.outputs.conflict == 'true'
@@ -134,47 +103,52 @@ jobs:
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
+          MCP_REPLAY_CONFLICT: ${{ steps.replay.outputs.conflict }}
+          MCP_GATE_OUTCOME: ${{ steps.gate.outcome }}
+          MCP_REQUEST_STALE: ${{ steps.upstream.outputs.stale }}
         with:
           model: ${{ env.OPENCODE_MODEL }}
+          variant: low
           use_github_token: true
           share: false
           prompt: |
             Maintain the minimal MCP rename on the current upstream release.
-            Read AGENTS.md and LESSONS.md. Do not modify docs/, prose, binary names,
-            account/work directories or /_magpie/claude-mcp/ paths. No sweeping
-            replacement or apply script. If the replay was aborted, replay every
-            commit listed in "$RUNNER_TEMP/rename-commits" onto the current branch.
-            Resolve cherry-pick conflicts manually at the small Go MCP literal
-            sites, git add the resolved files, then git cherry-pick --continue
-            until the sequencer finishes. Preserve
-            both mcp-rename: commits; additional fixes use that subject prefix.
-            The bridge key/serverInfo is my, allowedTools is mcp__my, bridge calls
-            start mcp__my__, collisions use my_web_search and my_wait. Keep one
-            legacy caller Library mcp__magpie__ strip and original callback names.
-            Run "$RUNNER_TEMP/mcp-gate" and fix only this rename's regressions.
-            Stay on the branch the action created and commit any repairs locally.
-            When request evidence is older than three days, inspect the actual
-            Claude-bound MCP config/tools/history/permissions and, if credentials
-            permit, a captured Claude API request. Check bridge-owned names for
-            Magpie; distinguish intentional caller Library names. Write sanitized
-            evidence to /tmp/claude-request-check.json with passed=true, method,
-            checked_at (UTC) and evidence only after that inspection passes.
-            If capture is unavailable, say so explicitly in method/evidence;
-            never claim a live capture from fixtures. Do not edit this workflow
-            to bypass checks, push tags, create releases, or publish images.
-            Default is dry-run; leave publication to the gated workflow steps.
+            Find sites and allowed caller literals in scripts/mcp-my/surface.manifest.yml
+            (before replay: "$RUNNER_TEMP/mcp-my/surface.manifest.yml") and failures
+            in gate stderr at "$RUNNER_TEMP/mcp-gate.stderr". Use these as your repair map.
+            - Conflict (MCP_REPLAY_CONFLICT=true): replay every commit in
+              "$RUNNER_TEMP/rename-commits" in order. Resolve only listed sites,
+              git add and cherry-pick --continue until the sequencer finishes.
+            - Gate (MCP_GATE_OUTCOME=failure): fix only the named surface/path/test
+              failures. Preserve caller names, binary names, account/work directories
+              and /_magpie/claude-mcp/ paths.
+            - Stale (MCP_REQUEST_STALE=true): inspect actual Claude-bound MCP
+              config/tools/history/permissions and a captured API request if credentials
+              permit. Write sanitized /tmp/claude-request-check.json with passed=true,
+              method, checked_at (UTC ISO8601) and evidence only after inspection passes.
+              If capture is unavailable, say so in method/evidence; fixtures are no live capture.
+            Hard bans: go test ./... (with or without flags), docs edits, AGENTS.md or
+            LESSONS.md edits, global replace, sweeping apply scripts, creating/pushing
+            tags, creating releases, building/publishing images, editing this workflow
+            to bypass checks.
+            Stay on this branch; preserve all mcp-rename: commits and use that prefix
+            for local repair commits. Success = scripts/mcp-my/gate.sh exits 0 and a
+            valid evidence file when stale. Publication belongs to gated workflow steps.
 
       - name: Require a clean replay and green gate after repair
         run: |
           set -euo pipefail
           test -z "$(git status --porcelain)"
-          "$RUNNER_TEMP/mcp-gate"
+          scripts/mcp-my/gate.sh
           git diff --binary "$UPSTREAM_SHA" > "$RUNNER_TEMP/mcp-my.patch"
           git log --oneline "$UPSTREAM_SHA"..HEAD > "$RUNNER_TEMP/mcp-my-commits.txt"
           echo "Dry-run artifacts are ready for $UPSTREAM_TAG; publication requires live_release or MCP_SYNC_LIVE=true." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate request evidence if provided
         run: |
+          if test '${{ steps.upstream.outputs.stale }}' = true; then
+            test -f /tmp/claude-request-check.json
+          fi
           if test -f /tmp/claude-request-check.json; then
             jq -e '.passed == true and (.method | type == "string") and (.evidence | length > 0) and (.checked_at | fromdateiso8601 > (now - 86400))' /tmp/claude-request-check.json
           fi
