@@ -1,0 +1,218 @@
+name: Sync upstream MCP rename
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      live_release:
+        description: Publish a -my tag, release and GHCR image
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [upstream-release, mcp-sync]
+
+concurrency:
+  group: sync-upstream-mcp-my
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  packages: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  MCP_SYNC_LIVE: ${{ vars.MCP_SYNC_LIVE || 'false' }}
+  OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
+  IMAGE: ghcr.io/tete1030/magpie-my
+
+jobs:
+  dispatch:
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      # OpenCode's GitHub runner supports workflow_dispatch, not repository_dispatch.
+      - run: gh workflow run sync-upstream.yml --repo "$GITHUB_REPOSITORY" --ref vendor/mcp-my
+
+  sync:
+    if: github.event_name != 'repository_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: vendor/mcp-my
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Select upstream release and check request evidence age
+        id: upstream
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          tag=$(gh release view --repo yetone/magpie --json tagName --jq .tagName)
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch https://github.com/yetone/magpie.git "refs/tags/$tag:refs/upstream/$tag"
+          upstream=$(git rev-parse "refs/upstream/$tag^{commit}")
+          echo "UPSTREAM_SHA=$upstream" >> "$GITHUB_ENV"
+          echo "UPSTREAM_TAG=$tag" >> "$GITHUB_ENV"
+          echo "SYNC_TAG=$tag-my" >> "$GITHUB_ENV"
+          git log --reverse --first-parent --format='%H %s' HEAD |
+            awk '$2 ~ /^mcp-rename:/ {print $1}' > "$RUNNER_TEMP/rename-commits"
+          test -s "$RUNNER_TEMP/rename-commits"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=claude-request-check&per_page=100" > "$RUNNER_TEMP/request-artifacts.json"
+          checked=$(jq -r '[.artifacts[] | select(.expired == false) | .created_at] | max // "1970-01-01T00:00:00Z"' "$RUNNER_TEMP/request-artifacts.json")
+          stale=false
+          if (( $(date +%s) - $(date -d "$checked" +%s) >= 259200 )); then stale=true; fi
+          echo "stale=$stale" >> "$GITHUB_OUTPUT"
+          # Keep the site map available even when replay stops before its commit.
+          cp -R scripts/mcp-my "$RUNNER_TEMP/mcp-my"
+          git switch -c "sync/upstream-$tag" "$upstream"
+
+      - name: Replay only the small rename commits
+        id: replay
+        run: |
+          mapfile -t commits < "$RUNNER_TEMP/rename-commits"
+          if git cherry-pick "${commits[@]}"; then
+            echo 'conflict=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'conflict=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check replay
+        id: gate
+        continue-on-error: true
+        run: scripts/mcp-my/gate.sh 2> >(tee "$RUNNER_TEMP/mcp-gate.stderr" >&2)
+
+      - name: Leave a clean branch for the agent to replay conflicted commits
+        if: steps.replay.outputs.conflict == 'true'
+        run: git cherry-pick --abort
+
+      - name: Resolve small rename conflicts or inspect Claude requests
+        if: steps.replay.outputs.conflict == 'true' || steps.gate.outcome == 'failure' || steps.upstream.outputs.stale == 'true'
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          MCP_REPLAY_CONFLICT: ${{ steps.replay.outputs.conflict }}
+          MCP_GATE_OUTCOME: ${{ steps.gate.outcome }}
+          MCP_REQUEST_STALE: ${{ steps.upstream.outputs.stale }}
+        with:
+          model: ${{ env.OPENCODE_MODEL }}
+          variant: low
+          use_github_token: true
+          share: false
+          prompt: |
+            Maintain the minimal MCP rename on the current upstream release.
+            Find sites and allowed caller literals in scripts/mcp-my/surface.manifest.yml
+            (before replay: "$RUNNER_TEMP/mcp-my/surface.manifest.yml") and failures
+            in gate stderr at "$RUNNER_TEMP/mcp-gate.stderr". Use these as your repair map.
+            - Conflict (MCP_REPLAY_CONFLICT=true): replay every commit in
+              "$RUNNER_TEMP/rename-commits" in order. Resolve only listed sites,
+              git add and cherry-pick --continue until the sequencer finishes.
+            - Gate (MCP_GATE_OUTCOME=failure): fix only the named surface/path/test
+              failures. Preserve caller names, binary names, account/work directories
+              and /_magpie/claude-mcp/ paths.
+            - Stale (MCP_REQUEST_STALE=true): inspect actual Claude-bound MCP
+              config/tools/history/permissions and a captured API request if credentials
+              permit. Write sanitized /tmp/claude-request-check.json with passed=true,
+              method, checked_at (UTC ISO8601) and evidence only after inspection passes.
+              If capture is unavailable, say so in method/evidence; fixtures are no live capture.
+            Hard bans: go test ./... (with or without flags), docs edits, AGENTS.md or
+            LESSONS.md edits, global replace, sweeping apply scripts, creating/pushing
+            tags, creating releases, building/publishing images, editing this workflow
+            to bypass checks.
+            Stay on this branch; preserve all mcp-rename: commits and use that prefix
+            for local repair commits. Success = scripts/mcp-my/gate.sh exits 0 and a
+            valid evidence file when stale. Publication belongs to gated workflow steps.
+
+      - name: Require a clean replay and green gate after repair
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          scripts/mcp-my/gate.sh
+          git diff --binary "$UPSTREAM_SHA" > "$RUNNER_TEMP/mcp-my.patch"
+          git log --oneline "$UPSTREAM_SHA"..HEAD > "$RUNNER_TEMP/mcp-my-commits.txt"
+          echo "Dry-run artifacts are ready for $UPSTREAM_TAG; publication requires live_release or MCP_SYNC_LIVE=true." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate request evidence if provided
+        run: |
+          if test '${{ steps.upstream.outputs.stale }}' = true; then
+            test -f /tmp/claude-request-check.json
+          fi
+          if test -f /tmp/claude-request-check.json; then
+            jq -e '.passed == true and (.method | type == "string") and (.evidence | length > 0) and (.checked_at | fromdateiso8601 > (now - 86400))' /tmp/claude-request-check.json
+          fi
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: mcp-sync-dry-run
+          path: |
+            ${{ runner.temp }}/mcp-my.patch
+            ${{ runner.temp }}/mcp-my-commits.txt
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: claude-request-check
+          path: /tmp/claude-request-check.json
+          if-no-files-found: ignore
+
+      - name: Check existing fork tag before publication
+        if: inputs.live_release == true || env.MCP_SYNC_LIVE == 'true'
+        run: |
+          set -euo pipefail
+          git ls-remote origin "refs/tags/$SYNC_TAG" > "$RUNNER_TEMP/published-tag"
+          if test -s "$RUNNER_TEMP/published-tag"; then
+            git fetch origin "refs/tags/$SYNC_TAG"
+            test "$(git rev-parse FETCH_HEAD^{tree})" = "$(git rev-parse HEAD^{tree})"
+            git checkout --detach FETCH_HEAD
+          fi
+
+      - name: Build release binary
+        if: inputs.live_release == true || env.MCP_SYNC_LIVE == 'true'
+        run: go build -tags nogui -trimpath -ldflags "-s -w -X main.version=${SYNC_TAG#v}" -o "${RUNNER_TEMP}/magpie-linux-amd64" .
+
+      - uses: docker/setup-buildx-action@v4
+        if: inputs.live_release == true || env.MCP_SYNC_LIVE == 'true'
+
+      - uses: docker/login-action@v4
+        if: inputs.live_release == true || env.MCP_SYNC_LIVE == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@v7
+        if: inputs.live_release == true || env.MCP_SYNC_LIVE == 'true'
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.SYNC_TAG }}
+            ${{ env.IMAGE }}:latest
+          build-args: VERSION=${{ env.SYNC_TAG }}
+
+      - name: Publish fork tag and release
+        if: inputs.live_release == true || env.MCP_SYNC_LIVE == 'true'
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code origin "refs/tags/$SYNC_TAG"; then
+            git fetch origin "refs/tags/$SYNC_TAG"
+            test "$(git rev-parse FETCH_HEAD^{commit})" = "$(git rev-parse HEAD)"
+          else
+            git tag "$SYNC_TAG"
+            git push origin "refs/tags/$SYNC_TAG"
+          fi
+          if ! gh release view "$SYNC_TAG" >/dev/null 2>&1; then
+            gh release create "$SYNC_TAG" "$RUNNER_TEMP/magpie-linux-amd64" --verify-tag \
+              --title "MCP my · $UPSTREAM_TAG" --notes "Upstream $UPSTREAM_TAG with the minimal MCP rename. Image: $IMAGE:$SYNC_TAG"
+          fi
